@@ -1,0 +1,10 @@
+# PowerShell script logs
+*.log
+
+# User-specific local settings (if any are added in future)
+*.local.ps1
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+.DS_Store
