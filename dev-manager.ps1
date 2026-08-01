@@ -1,264 +1,445 @@
-# dev-manager.ps1
+﻿<#
+.SYNOPSIS
+    DevHub CLI — interactive environment manager for multi-repo projects.
 
-$Backends = @{
-    "api-core"      = "C:\Projects\my-app\backend\api-core"
-    "auth-service"  = "C:\Projects\my-app\backend\auth-service"
-    "worker-service" = "C:\Projects\my-app\backend\worker"
+.DESCRIPTION
+    All configuration (repos, categories, apps) lives in
+    dev-manager.config.psd1 next to this script. The script itself is
+    generic: one menu engine, one repo menu, actions defined as data.
+    Add a hotkey by adding one entry to $RepoActions below.
+
+.NOTES
+    Keys inside a repo menu:
+        Enter = start the repo's dev command in a new terminal
+        V     = open in VS Code
+        E     = open in File Explorer
+        B     = show current git branch (also refreshes it)
+        R     = refresh all cached branch labels
+        Esc   = back
+#>
+
+#Requires -Version 5.1
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+# ============================================================
+# CONFIG
+# ============================================================
+$script:ConfigPath = Join-Path $PSScriptRoot 'dev-manager.config.psd1'
+
+function Import-DevConfig {
+    if (-not (Test-Path -LiteralPath $script:ConfigPath)) {
+        Write-Host "❌ Config file not found: $script:ConfigPath" -ForegroundColor Red
+        Write-Host "   Create it next to this script and run again." -ForegroundColor Yellow
+        exit 1
+    }
+    Import-PowerShellDataFile -Path $script:ConfigPath
 }
 
-$Frontends = @{
-    "main-web-app"  = "C:\Projects\my-app\frontend\main-web"
-    "admin-panel"   = "C:\Projects\my-app\frontend\admin-panel"
+$script:Config           = Import-DevConfig
+$script:BranchCache      = @{}   # path -> branch name (refreshed on demand)
+$script:StartedProcesses = New-Object System.Collections.ArrayList
+
+# ============================================================
+# HELPERS
+# ============================================================
+function Resolve-Command {
+    <# Returns the first command name from $Candidates that exists on PATH, else $null. #>
+    param([Parameter(Mandatory)][string[]]$Candidates)
+    foreach ($candidate in $Candidates) {
+        if (Get-Command $candidate -ErrorAction SilentlyContinue) { return $candidate }
+    }
+    return $null
 }
 
-# ====== Function to get current git branch ======
 function Get-CurrentGitBranch {
-    param([string]$RepoPath)
-    
-    if (Test-Path $RepoPath) {
-        $currentDir = Get-Location
-        Set-Location $RepoPath
+    param([Parameter(Mandatory)][string]$RepoPath)
+    if (-not (Test-Path -LiteralPath $RepoPath)) { return 'not found' }
+    try {
+        $branch = git -C $RepoPath branch --show-current 2>$null
+        if ($branch) { return ([string]$branch).Trim() }
+        return 'unknown'
+    }
+    catch {
+        return 'error'
+    }
+}
+
+function Get-CachedBranch {
+    param(
+        [Parameter(Mandatory)][string]$RepoPath,
+        [switch]$Refresh
+    )
+    if ($Refresh -or -not $script:BranchCache.ContainsKey($RepoPath)) {
+        $script:BranchCache[$RepoPath] = Get-CurrentGitBranch -RepoPath $RepoPath
+    }
+    return $script:BranchCache[$RepoPath]
+}
+
+function Start-RepoTerminal {
+    <# Launches the repo's Start command in a new terminal and tracks the process. #>
+    param([Parameter(Mandatory)][hashtable]$Repo)
+
+    $shell = Resolve-Command @('pwsh', 'powershell')
+    $cmd   = "Set-Location -LiteralPath '$($Repo.Path)'; $($Repo.Start)"
+    $proc  = Start-Process $shell -ArgumentList '-NoExit', '-Command', $cmd -PassThru
+
+    [void]$script:StartedProcesses.Add(@{ Name = $Repo.Name; Process = $proc })
+    Write-Host "▶️  Started '$($Repo.Name)' ($($Repo.Start))." -ForegroundColor Green
+}
+
+function Stop-StartedProcesses {
+    <# Kills every process tree started from this session (pwsh + npm + node). #>
+    if ($script:StartedProcesses.Count -eq 0) {
+        Write-Host 'ℹ️ Nothing was started from this session.' -ForegroundColor Yellow
+        return
+    }
+    foreach ($entry in $script:StartedProcesses) {
+        $proc = $entry.Process
         try {
-            $branch = git branch --show-current 2>$null
-            if ($branch) {
-                return $branch.Trim()
-            } else {
-                return "unknown"
+            if ($proc -and -not $proc.HasExited) {
+                taskkill /PID $proc.Id /T /F 2>$null | Out-Null
+                Write-Host "🛑 Stopped '$($entry.Name)' (PID $($proc.Id))." -ForegroundColor Yellow
             }
-        } catch {
-            return "error"
-        } finally {
-            Set-Location $currentDir
+        }
+        catch {
+            Write-Host "⚠️ Could not stop '$($entry.Name)': $_" -ForegroundColor Red
         }
     }
-    return "not found"
+    $script:StartedProcesses.Clear()
 }
 
-# ====== Reusable Menu Function ======
+function Get-RunningStartedProcesses {
+    # The leading comma stops PowerShell unrolling the array, so .Count is
+    # always safe at call sites — even when the array is empty.
+    return , @($script:StartedProcesses | Where-Object {
+        $p = $_.Process
+        $p -and -not $p.HasExited
+    })
+}
+
+function Test-RepoPath {
+    <# Prints an error and returns $false if the repo path is missing. #>
+    param([Parameter(Mandatory)][hashtable]$Repo)
+    if (Test-Path -LiteralPath $Repo.Path) { return $true }
+    Write-Host "❌ Path not found: $($Repo.Path)" -ForegroundColor Red
+    Pause
+    return $false
+}
+
+# ============================================================
+# ACTIONS (data-driven — add a hotkey here, everything updates)
+# ============================================================
+$script:RepoActions = @(
+    @{
+        Name = 'VSCode'; Char = 'V'; Hint = 'V = VS Code'; RequiresRepo = $true
+        Handler = {
+            param($Repo)
+            $code = Resolve-Command @('code')
+            if ($code) {
+                Start-Process $code -ArgumentList $Repo.Path
+            }
+            else {
+                Write-Host "⚠️ VS Code CLI not found. Run 'Shell Command: Install code command' in VS Code." -ForegroundColor Red
+                Pause
+            }
+        }
+    }
+    @{
+        # To add your own editor/IDE hotkey, copy this block and change
+        # Name/Char/Hint and the command list passed to Resolve-Command.
+        Name = 'Explorer'; Char = 'E'; Hint = 'E = Explorer'; RequiresRepo = $true
+        Handler = { param($Repo) explorer $Repo.Path }
+    }
+    @{
+        Name = 'Branch'; Char = 'B'; Hint = 'B = Git Branch'; RequiresRepo = $true
+        Handler = {
+            param($Repo)
+            $branch = Get-CachedBranch -RepoPath $Repo.Path -Refresh
+            Write-Host "🔍 Current branch for '$($Repo.Name)': $branch" -ForegroundColor Magenta
+            Pause
+        }
+    }
+    @{
+        Name = 'Refresh'; Char = 'R'; Hint = 'R = Refresh branches'; RequiresRepo = $false
+        Handler = { param($Repo) $script:BranchCache.Clear() }
+    }
+)
+
+# ============================================================
+# GENERIC MENU ENGINE
+# ============================================================
 function Show-Menu {
+    <#
+        Renders a navigable menu. $Items are hashtables with at least a Label key.
+        Returns @{ Action = <name>; Item = <selected item or $null> }.
+        Action is 'Select', 'Back', or the Name of a matched entry from $Actions.
+    #>
     param(
-        [string[]]$Items,
-        [string]$Title
+        [Parameter(Mandatory)][object[]]$Items,
+        [Parameter(Mandatory)][string]$Title,
+        [object[]]$Actions = @()
     )
 
     $selectedIndex = 0
     $total = $Items.Count
 
+    $hintParts = @('↑↓ = Navigate', 'Enter = Select')
+    foreach ($action in $Actions) { $hintParts += $action.Hint }
+    $hintParts += 'Esc = Back'
+    $hint = $hintParts -join ' | '
+
     while ($true) {
         Clear-Host
         Write-Host $Title -ForegroundColor Cyan
-        Write-Host ("=" * $Title.Length) -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host "↑↓ = Navigate | Enter = Select | V = Open in VS Code | E = Open in Explorer | B = Show Git Branch | Esc = Back" -ForegroundColor DarkGray
-        Write-Host ""
+        Write-Host ('=' * $Title.Length) -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host $hint -ForegroundColor DarkGray
+        Write-Host ''
 
         for ($i = 0; $i -lt $total; $i++) {
             if ($i -eq $selectedIndex) {
-                Write-Host "  → $($Items[$i])" -ForegroundColor Green
-            } else {
-                Write-Host "    $($Items[$i])"
+                Write-Host "  → $($Items[$i].Label)" -ForegroundColor Green
+            }
+            else {
+                Write-Host "    $($Items[$i].Label)"
             }
         }
 
-        $key = $Host.UI.RawUI.ReadKey("NoEcho, IncludeKeyDown")
-        $keyCode = $key.VirtualKeyCode
-        $keyChar = $key.Character
+        $key = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown')
 
-        # Navigation
-        if ($keyCode -eq 38) { $selectedIndex = [Math]::Max(0, $selectedIndex - 1) }       # Up
-        elseif ($keyCode -eq 40) { $selectedIndex = [Math]::Min($total - 1, $selectedIndex + 1) } # Down
-        
-        # Enter → select
-        elseif ($keyCode -eq 13) { return @{ Action = "Select"; Index = $selectedIndex } }
-        
-        # Esc → back
-        elseif ($keyCode -eq 27) { return @{ Action = "Back"; Index = $null } }
-        
-        # 'V' → open in VS Code
-        elseif ($keyChar -eq 'v' -or $keyChar -eq 'V') { return @{ Action = "VSCode"; Index = $selectedIndex } }
-        
-        # 'E' → open in Explorer
-        elseif ($keyChar -eq 'e' -or $keyChar -eq 'E') { return @{ Action = "Explorer"; Index = $selectedIndex } }
-        
-        # 'B' → show git branch
-        elseif ($keyChar -eq 'b' -or $keyChar -eq 'B') { return @{ Action = "Branch"; Index = $selectedIndex } }
+        if ($key.VirtualKeyCode -eq 38) {                      # Up
+            $selectedIndex = [Math]::Max(0, $selectedIndex - 1)
+        }
+        elseif ($key.VirtualKeyCode -eq 40) {                  # Down
+            $selectedIndex = [Math]::Min($total - 1, $selectedIndex + 1)
+        }
+        elseif ($key.VirtualKeyCode -eq 13) {                  # Enter
+            return @{ Action = 'Select'; Item = $Items[$selectedIndex] }
+        }
+        elseif ($key.VirtualKeyCode -eq 27) {                  # Esc
+            return @{ Action = 'Back'; Item = $null }
+        }
+        else {
+            $char = [char]::ToUpperInvariant($key.Character)
+            foreach ($action in $Actions) {
+                if ($action.Char -eq $char) {
+                    return @{ Action = $action.Name; Item = $Items[$selectedIndex] }
+                }
+            }
+        }
     }
 }
 
-function Show-BackendMenu {
-    $names = @($Backends.Keys)
-    $items = @("Start all backends") + $names + @("← Back to Main")
+# ============================================================
+# REPO MENU (one function for every category)
+# ============================================================
+function Get-ReposByCategory {
+    param([Parameter(Mandatory)][string]$CategoryName)
+    return , @($script:Config.Repos | Where-Object { $_.Category -eq $CategoryName })
+}
+
+function New-RepoMenuItems {
+    param(
+        [object[]]$Repos = @(),
+        [bool]$IncludeStartAll
+    )
+
+    $maxName = 0
+    foreach ($repo in $Repos) {
+        if ($repo.Name.Length -gt $maxName) { $maxName = $repo.Name.Length }
+    }
+
+    $items = New-Object System.Collections.ArrayList
+    if ($IncludeStartAll -and $Repos.Count -gt 0) {
+        [void]$items.Add(@{ Type = 'StartAll'; Label = 'Start all' })
+    }
+    if ((Get-RunningStartedProcesses).Count -gt 0) {
+        [void]$items.Add(@{ Type = 'StopAll'; Label = 'Stop all started processes' })
+    }
+    foreach ($repo in $Repos) {
+        $branch = Get-CachedBranch -RepoPath $repo.Path
+        $label  = '{0}  [{1}]' -f $repo.Name.PadRight($maxName), $branch
+        [void]$items.Add(@{ Type = 'Repo'; Label = $label; Repo = $repo })
+    }
+    [void]$items.Add(@{ Type = 'Back'; Label = '← Back to Main' })
+    return , $items.ToArray()
+}
+
+function Show-CategoryMenu {
+    param([Parameter(Mandatory)][hashtable]$Category)
 
     while ($true) {
-        $result = Show-Menu -Items $items -Title "🖥️  BACKEND SERVICES"
-        
-        # Handle "Back" (Esc or "← Back" selected)
-        if ($result.Action -eq "Back") { return }
-        if ($result.Index -eq ($items.Count - 1)) { return }
+        # Rebuilt each pass so branch labels and the Stop-all row stay current.
+        $repos  = Get-ReposByCategory -CategoryName $Category.Name
+        $items  = New-RepoMenuItems -Repos $repos -IncludeStartAll $Category.IncludeStartAll
+        $result = Show-Menu -Items $items -Title $Category.Title -Actions $script:RepoActions
 
-        $idx = $result.Index
+        if ($result.Action -eq 'Back') { return }
+        $item = $result.Item
 
-        # "Start all backends" is index 0
-        if ($idx -eq 0) {
-            if ($result.Action -eq "Select") {
-                # Start all backends (only on Enter)
-                foreach ($name in $names) {
-                    $path = $Backends[$name]
-                    if (Test-Path $path) {
-                        $cmd = "Set-Location -Path '$path'; npm start"
-                        Start-Process pwsh -ArgumentList "-NoExit", "-Command", $cmd
+        # Global actions (e.g. Refresh) work no matter which row is highlighted.
+        $globalAction = $script:RepoActions |
+            Where-Object { $_.Name -eq $result.Action -and -not $_.RequiresRepo } |
+            Select-Object -First 1
+        if ($globalAction) {
+            & $globalAction.Handler $null
+            continue
+        }
+
+        switch ($item.Type) {
+            'Back' {
+                if ($result.Action -eq 'Select') { return }
+            }
+            'StartAll' {
+                if ($result.Action -eq 'Select') {
+                    foreach ($repo in $repos) {
+                        if (Test-Path -LiteralPath $repo.Path) {
+                            Start-RepoTerminal -Repo $repo
+                        }
+                        else {
+                            Write-Host "❌ Path not found: $($repo.Path)" -ForegroundColor Red
+                        }
                     }
+                    Write-Host "✅ All $($Category.Name) repos started." -ForegroundColor Green
+                    Pause
                 }
-                Write-Host "✅ All backends started." -ForegroundColor Green
-                Pause
-            }
-            elseif ($result.Action -eq "VSCode") {
-                Write-Host "ℹ️ 'Start all' has no single folder to open." -ForegroundColor Yellow
-                Pause
-            }
-            elseif ($result.Action -eq "Explorer") {
-                Write-Host "ℹ️ 'Start all' has no single folder to open." -ForegroundColor Yellow
-                Pause
-            }
-            elseif ($result.Action -eq "Branch") {
-                Write-Host "ℹ️ 'Start all' has no single repository to check." -ForegroundColor Yellow
-                Pause
-            }
-            continue
-        }
-
-        # Individual backend (index 1+ → maps to $names[$idx - 1])
-        $name = $names[$idx - 1]
-        $path = $Backends[$name]
-        if (-not (Test-Path $path)) {
-            Write-Host "❌ Path not found: $path" -ForegroundColor Red
-            Pause
-            continue
-        }
-
-        switch ($result.Action) {
-            "Select" {
-                # Start service in new terminal
-                $cmd = "Set-Location -Path '$path'; npm start"
-                Start-Process pwsh -ArgumentList "-NoExit", "-Command", $cmd
-            }
-            "VSCode" {
-                # Open ONLY in VS Code — no terminal
-                if (Get-Command code -ErrorAction SilentlyContinue) {
-                    Start-Process code -ArgumentList $path
-                } else {
-                    Write-Host "⚠️ VS Code CLI not found. Run 'Shell Command: Install code command' in VS Code." -ForegroundColor Red
+                else {
+                    Write-Host "ℹ️ 'Start all' has no single repo — highlight a repo first." -ForegroundColor Yellow
                     Pause
                 }
             }
-            "Explorer" {
-                # Open ONLY in File Explorer
-                explorer $path
+            'StopAll' {
+                if ($result.Action -eq 'Select') {
+                    Stop-StartedProcesses
+                    Pause
+                }
             }
-            "Branch" {
-                # Show current git branch
-                $branch = Get-CurrentGitBranch -RepoPath $path
-                Write-Host "🔍 Current branch for '$name': $branch" -ForegroundColor Magenta
-                Pause
+            'Repo' {
+                $repo = $item.Repo
+                if (-not (Test-RepoPath -Repo $repo)) { break }
+
+                if ($result.Action -eq 'Select') {
+                    Start-RepoTerminal -Repo $repo
+                    Start-Sleep -Milliseconds 500
+                }
+                else {
+                    $action = $script:RepoActions |
+                        Where-Object { $_.Name -eq $result.Action } |
+                        Select-Object -First 1
+                    if ($action) { & $action.Handler $repo }
+                }
             }
         }
     }
 }
 
-function Show-FrontendMenu {
-    $names = @($Frontends.Keys)
-    $items = $names + @("← Back to Main")
+# ============================================================
+# APP LAUNCHER + MAIN MENU
+# ============================================================
+function Start-DevApp {
+    param([Parameter(Mandatory)][hashtable]$App)
 
-    while ($true) {
-        $result = Show-Menu -Items $items -Title "🌐 FRONTEND APPS"
-        
-        if ($result.Action -eq "Back") { return }
-        if ($result.Index -eq ($items.Count - 1)) { return }
+    $isFile    = Test-Path -LiteralPath $App.Path
+    $isCommand = [bool](Get-Command $App.Path -ErrorAction SilentlyContinue)
 
-        $idx = $result.Index
-        $name = $names[$idx]
-        $path = $Frontends[$name]
-
-        if (-not (Test-Path $path)) { continue }
-
-        switch ($result.Action) {
-            "Select" {
-                # This opens a terminal (expected)
-                $cmd = "Set-Location -Path '$path'; npm run dev"
-                Start-Process pwsh -ArgumentList "-NoExit", "-Command", $cmd
-            }
-            "VSCode" {
-                # ✅ This opens ONLY VS Code — no terminal
-                if (Test-Path $path) {
-                    Start-Process code -ArgumentList $path
-                }
-            }
-            "Explorer" {
-                # ✅ This opens ONLY Explorer
-                if (Test-Path $path) {
-                    explorer $path
-                }
-            }
-            "Branch" {
-                # Show current git branch
-                $branch = Get-CurrentGitBranch -RepoPath $path
-                Write-Host "🔍 Current branch for '$name': $branch" -ForegroundColor Magenta
-                Pause
-            }
-        }
+    if ($isFile -or $isCommand) {
+        Write-Host "🚀 Launching $($App.Name)..." -ForegroundColor Green
+        Start-Process -FilePath $App.Path
+        Start-Sleep -Seconds 1
+    }
+    else {
+        Write-Host "❌ Application or command not found: $($App.Path)" -ForegroundColor Red
+        Pause
     }
 }
 
-# ====== OTHER TOOLS/APPS CONFIG ======
-$OtherApps = @{
-    "Notepad"    = "notepad.exe"
-    # To add more, just follow the format: "Display Name" = "Path to EXE or File"
-}
-
-# ====== MAIN MENU ======
 function Show-MainMenu {
     while ($true) {
-        $appNames = @($OtherApps.Keys)
-        $mainItems = @("Manage BACKEND services", "Manage FRONTEND apps") + $appNames + @("Exit")
-        
-        $result = Show-Menu -Items $mainItems -Title "🚀 DEV HUB MANAGER"
-        
-        if ($result.Action -eq "Back") { return }
-        
-        $idx = $result.Index
-        $totalItems = $mainItems.Count
-        
-        # 1. Manage Backends
-        if ($idx -eq 0) { Show-BackendMenu }
-        
-        # 2. Manage Frontends
-        elseif ($idx -eq 1) { Show-FrontendMenu }
-        
-        # 3. Handle Dynamic "Other Apps"
-        elseif ($idx -ge 2 -and $idx -lt ($totalItems - 1)) {
-            $appName = $appNames[$idx - 2]
-            $appPath = $OtherApps[$appName]
-            
-            # Check if it's a file path or a system command
-            if ((Test-Path $appPath) -or (Get-Command $appPath -ErrorAction SilentlyContinue)) {
-                Write-Host "🚀 Launching $appName..." -ForegroundColor Green
-                Start-Process -FilePath $appPath
-                Start-Sleep -Seconds 1
-            } else {
-                Write-Host "❌ Application or Command not found: $appPath" -ForegroundColor Red
-                Pause
-            }
+        $items = New-Object System.Collections.ArrayList
+        foreach ($category in $script:Config.Categories) {
+            [void]$items.Add(@{
+                Type     = 'Category'
+                Label    = "Manage $($category.Name.ToUpper())"
+                Category = $category
+            })
         }
-        
-        # 4. Exit
-        elseif ($idx -eq ($totalItems - 1)) {
-            Clear-Host
-            Write-Host "👋 Goodbye! Happy coding!" -ForegroundColor Green
-            Start-Sleep 1.5
-            exit
+        foreach ($app in $script:Config.Apps) {
+            [void]$items.Add(@{ Type = 'App'; Label = $app.Name; App = $app })
+        }
+        if ((Get-RunningStartedProcesses).Count -gt 0) {
+            [void]$items.Add(@{ Type = 'StopAll'; Label = 'Stop all started processes' })
+        }
+        [void]$items.Add(@{ Type = 'Exit'; Label = 'Exit' })
+
+        $result = Show-Menu -Items $items.ToArray() -Title '🚀 DEV HUB MANAGER'
+
+        if ($result.Action -eq 'Back') { return }
+        if ($result.Action -ne 'Select') { continue }
+
+        switch ($result.Item.Type) {
+            'Category' { Show-CategoryMenu -Category $result.Item.Category }
+            'App'      { Start-DevApp -App $result.Item.App }
+            'StopAll'  { Stop-StartedProcesses; Pause }
+            'Exit'     { return }
         }
     }
 }
 
-# Start the application
+# ============================================================
+# SYSTEM HEALTH CHECK (startup validation)
+# ============================================================
+function Test-Environment {
+    $checks = @(
+        @{ Name = 'git';  Why = 'git branch detection (B / inline labels)' }
+        @{ Name = 'npm';  Why = 'starting services (Enter / Start all)' }
+        @{ Name = 'code'; Why = "opening repos in VS Code (V)" }
+    )
+
+    $warnings = New-Object System.Collections.ArrayList
+    foreach ($check in $checks) {
+        if (-not (Resolve-Command @($check.Name))) {
+            [void]$warnings.Add("  ⚠️ '$($check.Name)' not found on PATH — needed for $($check.Why).")
+        }
+    }
+
+    $missingRepos = New-Object System.Collections.ArrayList
+    foreach ($repo in $script:Config.Repos) {
+        if (-not (Test-Path -LiteralPath $repo.Path)) {
+            [void]$missingRepos.Add("  ⚠️ '$($repo.Name)' path not found: $($repo.Path)")
+        }
+    }
+
+    if ($warnings.Count -gt 0 -or $missingRepos.Count -gt 0) {
+        Clear-Host
+        Write-Host '🩺 SYSTEM HEALTH CHECK' -ForegroundColor Yellow
+        Write-Host ('=' * 22) -ForegroundColor Yellow
+        if ($warnings.Count -gt 0) {
+            Write-Host ''
+            Write-Host 'Missing commands:' -ForegroundColor Yellow
+            foreach ($w in $warnings) { Write-Host $w -ForegroundColor Yellow }
+        }
+        if ($missingRepos.Count -gt 0) {
+            Write-Host ''
+            Write-Host "Missing repo paths (edit dev-manager.config.psd1):" -ForegroundColor Yellow
+            foreach ($m in $missingRepos) { Write-Host $m -ForegroundColor Yellow }
+        }
+        Write-Host ''
+        Write-Host 'You can continue — affected features will show errors when used.' -ForegroundColor DarkGray
+        Pause
+    }
+}
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+Test-Environment
 Show-MainMenu
+
+Clear-Host
+$stillRunning = Get-RunningStartedProcesses
+if ($stillRunning.Count -gt 0) {
+    Write-Host "ℹ️ $($stillRunning.Count) started process(es) are still running — left untouched." -ForegroundColor Yellow
+}
+Write-Host '👋 Goodbye! Happy coding!' -ForegroundColor Green
+Start-Sleep -Seconds 1
