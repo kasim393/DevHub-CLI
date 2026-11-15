@@ -2095,6 +2095,8 @@ steps = [{{ repo = "web1" }}, {{ repo = "web2" }}]
 
     #[test]
     fn unlisted_projects_stay_usable() {
+        // Checks the start-up toast: no other test's server may be reattached meanwhile.
+        let _turn = registry_turn();
         let app = app_with(
             r#"
 [[repos]]
@@ -2123,6 +2125,7 @@ steps = [{ repo = "api" }]
 
     #[test]
     fn unknown_names_are_reported() {
+        let _turn = registry_turn();
         let app = app_with(
             r#"
 [[repos]]
@@ -2165,6 +2168,7 @@ path = '{dir}'
 
     #[test]
     fn sections_order_items_and_fold() {
+        let _turn = registry_turn();
         let mut app = app_with(
             r#"
 [[repos]]
