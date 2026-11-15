@@ -1,8 +1,13 @@
-<img src="assets/icon.png" alt="" width="88" align="right">
+<p align="center">
+  <img src="assets/icon.png" alt="DevHub" width="110">
+</p>
 
-# DevHub CLI
+<h1 align="center">DevHub CLI</h1>
 
-A terminal dashboard to run, watch and manage the dev servers of a multi-repo project — one screen, one key per action.
+<p align="center">
+  A terminal dashboard to run, watch and manage the dev servers of a multi-repo project.<br>
+  One screen, one key per action.
+</p>
 
 ![DevHub dashboard](docs/screenshot.png)
 
