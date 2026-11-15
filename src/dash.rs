@@ -234,7 +234,7 @@ fn target(app: &App) -> Option<Target<'_>> {
 pub fn draw(f: &mut Frame, app: &mut App) {
     let [top, body, bottom] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(f.area());
-    let [left, right] = Layout::horizontal([Constraint::Length(34), Constraint::Min(1)])
+    let [left, right] = Layout::horizontal([Constraint::Length(40), Constraint::Min(1)])
         .spacing(1)
         .areas(body);
 

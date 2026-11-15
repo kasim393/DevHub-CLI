@@ -750,6 +750,7 @@ fn draw_help(f: &mut Frame, app: &App) {
         ("c".into(), "clear the log"),
         ("L".into(), "open the log in the editor"),
         ("b".into(), "switch git branch"),
+        ("p".into(), "git pull (fast-forward only)"),
         ("/".into(), "filter by name"),
         (",".into(), "edit the config"),
         ("R".into(), "reload the config"),

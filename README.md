@@ -1,3 +1,5 @@
+<img src="assets/icon.png" alt="" width="88" align="right">
+
 # DevHub CLI
 
 A terminal dashboard to run, watch and manage the dev servers of a multi-repo project — one screen, one key per action.
@@ -16,13 +18,17 @@ A terminal dashboard to run, watch and manage the dev servers of a multi-repo pr
 - **Shared dependencies**: `needs = ["api"]` starts the API first, only if it isn't running already.
 - **Servers outlive the app**: close DevHub (or let it crash) and your servers keep running; open it again and it reattaches, logs included. On quit you choose: stop all, or leave running.
 - **Neon dashboard**: CPU, memory and response-time charts, start-up progress, errors per hour, log rate and port health per server.
-- **Git built in**: branches newest first, recent commits, and a branch switcher (`b`) that fetches in the background.
+- **Git built in**: branches newest first, recent commits, a branch switcher (`b`) that fetches in the background, and `git pull` (`p`, fast-forward only).
 - **Logs**: find (`ctrl+f`, then `n` / `N`), follow, clear, or open the full log in your editor (`L`).
 - **Open anywhere**: VS Code, Zed, Antigravity, file explorer, or `localhost:port` in the browser.
 
 ## Install
 
-Needs [Rust](https://rustup.rs). Then, from this folder:
+**Download:** grab the file for your system from the
+[latest release](../../releases/latest), unzip it, and put `devhub` (`devhub.exe`
+on Windows) somewhere on your `PATH`.
+
+**Or build it** with [Rust](https://rustup.rs), from this folder:
 
 ```bash
 cargo install --path .
@@ -69,7 +75,7 @@ steps = [
 | `o` | open `localhost:port` in the browser |
 | `v` `z` `a` `e` | open in VS Code / Zed / Antigravity / file explorer |
 | `tab` | log ↔ git |
-| `b` | switch git branch |
+| `b` / `p` | switch git branch / `git pull` |
 | `/` | filter projects |
 | `ctrl+f` `n` `N` | find in the log |
 | `pgup` `pgdn` `f` `c` `L` | scroll / follow / clear / open the log |

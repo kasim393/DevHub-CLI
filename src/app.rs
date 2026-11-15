@@ -257,6 +257,8 @@ pub struct App {
     last_draw: Instant,
     /// Git info per repo folder, and when it was read.
     pub git: HashMap<PathBuf, (proc::GitInfo, Instant)>,
+    /// Projects with a `git pull` under way.
+    pulling: HashSet<PathBuf>,
     git_loading: HashSet<PathBuf>,
     /// Find-in-log text and the log line it currently points at.
     pub search: String,
@@ -309,6 +311,7 @@ impl App {
             dirty: true,
             last_draw: Instant::now(),
             git: HashMap::new(),
+            pulling: HashSet::new(),
             git_loading: HashSet::new(),
             search: String::new(),
             search_hit: None,
@@ -560,6 +563,17 @@ impl App {
                             .min(vis.len().saturating_sub(1));
                     }
                     Err(e) => p.fetch_error = Some(e),
+                }
+            }
+            Msg::Pulled { path, project, result } => {
+                self.pulling.remove(&path);
+                match result {
+                    Ok(summary) => {
+                        self.git.remove(&path);
+                        self.load_git(true);
+                        self.flash(format!("✓ {project}: {summary}"));
+                    }
+                    Err(e) => self.flash(format!("✗ {project}: {e}")),
                 }
             }
             Msg::Switched { path, result } => match result {
@@ -1445,6 +1459,25 @@ impl App {
     }
 
     /// Opens the branch picker for the selected project (not for a whole group).
+    /// `git pull --ff-only` for the selected project, in the background.
+    fn pull_selected(&mut self) {
+        let Some(ui) = self.current().and_then(|r| r.unit()) else {
+            self.flash("Select a project to pull");
+            return;
+        };
+        let (path, project) = (self.units[ui].path.clone(), self.units[ui].name.clone());
+        if !self.pulling.insert(path.clone()) {
+            self.flash(format!("Already pulling {project}"));
+            return;
+        }
+        self.flash(format!("Pulling {project}…"));
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = proc::pull(&path, Duration::from_secs(60));
+            let _ = tx.send(Msg::Pulled { path, project, result });
+        });
+    }
+
     fn open_picker(&mut self) {
         let Some(ui) = self.current().and_then(|r| r.unit()) else {
             self.flash("Select a project to switch its branch");
@@ -1656,6 +1689,7 @@ impl App {
             KeyCode::Char('N') if !self.search.is_empty() => self.search_jump(false, false),
             KeyCode::Char('L') => self.open_log(),
             KeyCode::Char('b') => self.open_picker(),
+            KeyCode::Char('p') => self.pull_selected(),
             KeyCode::Esc if !self.search.is_empty() => {
                 self.search.clear();
                 self.search_hit = None;
@@ -1689,7 +1723,7 @@ impl App {
 }
 
 /// Keys the app uses itself; `open` entries may not take them.
-const RESERVED: &str = "qkjgGrsSocf/R,? nNLhlb";
+const RESERVED: &str = "qkjgGrsSocf/R,? nNLhlbp";
 
 /// The section holding groups that name no section.
 pub const LOOSE: &str = "groups";

@@ -120,6 +120,8 @@ pub enum Msg {
     Health(Vec<(u32, bool)>),
     /// A background fetch finished: the fresh branch list, or why it failed.
     Fetched { path: PathBuf, result: Result<Vec<BranchItem>, String> },
+    /// A `git pull` finished: its summary line or git's error.
+    Pulled { path: PathBuf, project: String, result: Result<String, String> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -182,33 +184,64 @@ pub fn branch_list(path: &Path) -> Result<Vec<BranchItem>, String> {
 /// `git fetch --all --prune`, never asking for a password on a terminal (there is none).
 /// Gives up after `timeout`. Returns git's error text on failure.
 pub fn fetch(path: &Path, timeout: Duration) -> Result<(), String> {
+    git_timed(path, &["fetch", "--all", "--prune", "--quiet"], timeout).map(|_| ())
+}
+
+/// `git pull --ff-only`: never merges or rebases on its own, so it can't leave the
+/// project mid-conflict. Returns a one-line summary ("3 files changed, …" or
+/// "Already up to date.") or git's reason for refusing.
+pub fn pull(path: &Path, timeout: Duration) -> Result<String, String> {
+    let out = git_timed(path, &["pull", "--ff-only"], timeout)?;
+    let lines: Vec<&str> = out.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    Ok(lines
+        .iter()
+        .rev()
+        .find(|l| l.contains("changed") || l.contains("up to date"))
+        .or(lines.last())
+        .map(|l| l.to_string())
+        .unwrap_or_else(|| "pulled".into()))
+}
+
+/// Runs git in `path` with no terminal to prompt on, giving up after `timeout`.
+/// Returns its output, or the first line of its error.
+fn git_timed(path: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut child = hidden("git")
         .arg("-C")
         .arg(path)
-        .args(["fetch", "--all", "--prune", "--quiet"])
+        .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
+    // Read both pipes on the side, so a chatty git can't fill one and stall.
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut s);
+            }
+            s
+        })
+    };
+    let out = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let err = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let start = Instant::now();
+    let what = args.first().copied().unwrap_or("git");
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
                 if status.success() {
-                    return Ok(());
+                    return Ok(out);
                 }
-                let mut err = String::new();
-                if let Some(mut e) = child.stderr.take() {
-                    let _ = e.read_to_string(&mut err);
-                }
-                let first = err.lines().find(|l| !l.trim().is_empty()).unwrap_or("fetch failed");
-                return Err(first.trim().to_string());
+                let first = err.lines().find(|l| !l.trim().is_empty()).map(str::trim);
+                return Err(first.unwrap_or(&format!("{what} failed")).to_string());
             }
             Ok(None) if start.elapsed() > timeout => {
                 let _ = child.kill();
-                return Err("fetch timed out".into());
+                return Err(format!("{what} timed out"));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
             Err(e) => return Err(e.to_string()),
@@ -892,6 +925,23 @@ mod tests {
         let err = switch_branch(&work, &feat).unwrap_err();
         assert!(!err.is_empty());
         assert_eq!(git_branch(&work).as_deref(), Some("main"), "stayed put");
+
+        // Pull: brings in new commits, then says it's up to date.
+        git(&work, &["checkout", "-q", "--", "a.txt"]);
+        std::fs::write(origin.join("c.txt"), "new").unwrap();
+        git(&origin, &["add", "."]);
+        git(&origin, &["commit", "-m", "new on main"]);
+        let pulled = pull(&work, Duration::from_secs(30)).unwrap();
+        assert!(pulled.contains("changed"), "{pulled}");
+        assert!(work.join("c.txt").exists());
+        assert!(pull(&work, Duration::from_secs(30)).unwrap().contains("up to date"));
+        // Diverged history: --ff-only refuses instead of merging.
+        std::fs::write(work.join("a.txt"), "local").unwrap();
+        git(&work, &["commit", "-qam", "local only"]);
+        std::fs::write(origin.join("a.txt"), "remote").unwrap();
+        git(&origin, &["commit", "-qam", "remote only"]);
+        assert!(pull(&work, Duration::from_secs(30)).is_err());
+        assert_eq!(changed_count(&work), 0, "nothing left half-merged");
 
         // A branch pushed to the remote after the clone appears only after a fetch.
         git(&origin, &["branch", "brand-new"]);
