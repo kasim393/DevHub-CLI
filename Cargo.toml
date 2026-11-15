@@ -1,6 +1,6 @@
 [package]
 name = "devhub"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 description = "A minimal terminal dashboard to run, watch and manage your dev servers"
 license = "MIT"
