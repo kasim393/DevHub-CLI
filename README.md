@@ -40,6 +40,7 @@ cargo install --path .
 ```
 
 Run `devhub` from any terminal, or `devhub --focus` for a borderless, maximised Windows Terminal window.
+Started on its own (Win+R → `devhub`, a double-click or a shortcut) it opens that focused window by itself.
 
 ## Config
 

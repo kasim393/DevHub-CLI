@@ -14,7 +14,8 @@ Usage: devhub [--config <file>]
 Options:
   -c, --config <file>   Use this config file
       --focus           Open in a maximised Windows Terminal window with no tab
-                        or title bar (F11 toggles full screen, ctrl+shift+F focus mode)
+                        or title bar (F11 toggles full screen, ctrl+shift+F focus mode).
+                        Started from Win+R or a shortcut, it does this by itself.
       --config-path     Print the config path and exit
   -h, --help            Show this help
 
@@ -37,7 +38,12 @@ fn main() -> anyhow::Result<()> {
         println!("{}", cfg_path.display());
         return Ok(());
     }
-    if args.iter().any(|a| a == "--focus") && open_focused(&args) {
+    // Started on its own (Win+R, a double-click, a shortcut) rather than from a shell:
+    // nobody chose a terminal, so open the focused one. `--focused` marks the copy that
+    // `open_focused` starts, which must not do this again.
+    let relaunched = args.iter().any(|a| a == "--focused");
+    let wants_focus = args.iter().any(|a| a == "--focus") || (!relaunched && started_alone());
+    if wants_focus && !relaunched && open_focused(&args) {
         return Ok(());
     }
 
@@ -73,12 +79,31 @@ fn open_focused(args: &[String]) -> bool {
         .args(["-w", "new", "--focus", "--maximized", "--title", "devhub", "--suppressApplicationTitle"])
         .arg(exe)
         .args(rest)
+        .arg("--focused")
         .spawn()
         .is_ok();
     if !started {
         eprintln!("Windows Terminal (wt.exe) not found: running here instead.");
     }
     started
+}
+
+/// Windows: true when devhub is the only process on its console, i.e. the console was
+/// made just for it (Run, Explorer, a shortcut) instead of belonging to a shell.
+#[cfg(windows)]
+fn started_alone() -> bool {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
+    }
+    let mut pids = [0u32; 4];
+    // SAFETY: the buffer is valid for `pids.len()` entries; the call only writes there.
+    unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) == 1 }
+}
+
+#[cfg(not(windows))]
+fn started_alone() -> bool {
+    false
 }
 
 /// The first run after the rename from zdev: copies the config, the folded sections
