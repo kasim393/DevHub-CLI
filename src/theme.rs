@@ -28,17 +28,17 @@ const fn hex(rgb: u32) -> Color {
 }
 
 pub const NEON: Theme = Theme {
-    background: Some(hex(0x070A09)),
-    text: hex(0xC9E9DE),
-    dim: hex(0x4F6A61),
-    label: hex(0x5B7A70),
-    border: hex(0x1D2B27),
-    accent: hex(0x7CF2C2),
-    ok: hex(0x7CF2C2),
-    busy: hex(0xE8C46A),
-    bad: hex(0xFF6B6B),
-    selected: Some(hex(0x10201B)),
-    matched: Some(hex(0x1F3A30)),
+    background: Some(hex(0x060908)),
+    text: hex(0xD8F2E8),
+    dim: hex(0x618377),
+    label: hex(0x70988A),
+    border: hex(0x243C34),
+    accent: hex(0x5CF0BA),
+    ok: hex(0x5CF0BA),
+    busy: hex(0xF0C95C),
+    bad: hex(0xFF6363),
+    selected: Some(hex(0x112D24)),
+    matched: Some(hex(0x1E4939)),
 };
 
 /// The neon look; see-through when `transparent` (no background, no fills).

@@ -2309,6 +2309,8 @@ path = '{dir}'
 
 
     /// Renders the dashboard with sample data and prints it (run with --nocapture to look).
+    /// With DEVHUB_SCREENSHOT=<file.svg> it also writes the screen as an SVG image
+    /// (that's the screenshot in the README).
     #[test]
     fn dashboard_renders_with_data() {
         use ratatui::backend::TestBackend;
@@ -2316,61 +2318,101 @@ path = '{dir}'
         let mut app = app_with(
             r#"
 [[sections]]
-name = "zimpra-core"
-items = ["backends", "tracking-web", "order-web"]
+name = "shop"
+items = ["backend", "storefront", "admin", "checkout"]
+
+[[sections]]
+name = "mobile"
+items = ["app"]
 
 [[repos]]
-name = "api-core"
+name = "api"
 path = '{dir}'
-cmd = "nest start"
+cmd = "nest start --watch"
 port = 3000
 listed = false
 
 [[repos]]
-name = "tracking-web"
+name = "search"
+path = '{dir}'
+cmd = "npm run dev"
+port = 3010
+listed = false
+
+[[repos]]
+name = "storefront"
 path = '{dir}'
 cmd = "next dev -p 3002"
 port = 3002
-needs = ["api-core"]
+needs = ["api", "search"]
 
 [[repos]]
-name = "order-web"
+name = "admin"
 path = '{dir}'
-cmd = "next dev -p 3004"
+cmd = "vite --port 3004"
+port = 3004
+needs = ["api"]
+
+[[repos]]
+name = "checkout"
+path = '{dir}'
+cmd = "next dev -p 3006"
+
+[[repos]]
+name = "app"
+path = '{dir}'
+cmd = "expo start"
 
 [[groups]]
-name = "backends"
-section = "zimpra-core"
-steps = [{ repo = "api-core" }]
+name = "backend"
+section = "shop"
+steps = [{ repo = "api" }, { repo = "search" }]
 "#,
         );
-        for name in ["api-core", "tracking-web"] {
+        for (n, name) in ["api", "search", "storefront"].into_iter().enumerate() {
             let i = app.units.iter().position(|u| u.name == name).unwrap();
+            app.stats.insert(4000 + i as u32, (4.2 + n as f32 * 3.1, 420_000_000 + n as u64 * 150_000_000));
             let u = &mut app.units[i];
             u.status = Status::Running;
             u.pid = Some(4000 + i as u32);
-            u.started = Some(Instant::now() - Duration::from_secs(2537));
+            u.started = Some(Instant::now() - Duration::from_secs(2537 - n as u64 * 40));
             u.up = Some(true);
-            u.branch = Some("feat/trip-eta".into());
-            for k in 0..120 {
-                let x = k as f32;
-                u.metrics.cpu.push_back(3.0 + (x / 6.0).sin().abs() * 9.0);
-                u.metrics.mem.push_back(300_000_000 + (k as u64) * 2_500_000);
-                u.metrics.rt.push_back(if k % 3 == 0 { None } else { Some((35.0 + (x / 4.0).cos() * 8.0 + if k == 100 { 380.0 } else { 0.0 }) as f64) });
+            u.branch = Some(if name == "storefront" { "feat/cart-drawer" } else { "main" }.into());
+            for k in 0..150 {
+                let x = k as f32 + n as f32 * 7.0;
+                u.metrics.cpu.push_back(3.0 + (x / 6.0).sin().abs() * 9.0 + (x / 17.0).cos().abs() * 4.0);
+                u.metrics.mem.push_back(300_000_000 + (k as u64) * 2_000_000 + ((x / 9.0).sin() * 20_000_000.0) as u64);
+                u.metrics.rt.push_back(if k % 3 == 0 { None } else { Some((35.0 + (x / 4.0).cos() * 8.0 + if k == 110 { 320.0 } else { 0.0 }) as f64) });
                 u.metrics.rate.push_back(((x / 3.0).sin().abs() * 20.0).round());
             }
-            u.metrics.rt_peak = 420.0;
+            u.metrics.rt_peak = 360.0;
             u.metrics.errors = [0, 1, 0, 0, 3, 0, 0, 1].into_iter().collect();
-            proc::log_line(&u.log, "✓ Compiled /trips in 1.2s (812 modules)");
-            proc::log_line(&u.log, "GET /api/trips?status=live 200 in 38ms");
-            proc::log_line(&u.log, "⚠ Fast Refresh had to perform a full reload");
-            proc::log_line(&u.log, "Error: ETA service timeout after 400ms");
+            if name == "storefront" {
+                for line in [
+                    "$ next dev -p 3002",
+                    "  ▲ Next.js 15.1.0",
+                    "  - Local:        http://localhost:3002",
+                    " ✓ Ready in 2.1s",
+                    " ○ Compiling /products ...",
+                    " ✓ Compiled /products in 1.2s (812 modules)",
+                    " GET /products 200 in 64ms",
+                    " GET /api/cart 200 in 38ms",
+                    " GET /api/products?page=2 200 in 41ms",
+                    " ⚠ Fast Refresh had to perform a full reload",
+                    " GET /products/blue-hoodie 200 in 52ms",
+                    " Error: search timed out after 300ms",
+                    " GET /api/cart 200 in 36ms",
+                    " POST /api/cart/items 201 in 87ms",
+                ] {
+                    proc::log_line(&u.log, line);
+                }
+            }
         }
-        let web = app.rows.iter().position(|r| matches!(r, Row::Unit(u) if app.units[*u].name == "tracking-web")).unwrap();
+        let web = app.rows.iter().position(|r| matches!(r, Row::Unit(u) if app.units[*u].name == "storefront")).unwrap();
         app.selected = web;
-        let mut term = Terminal::new(TestBackend::new(130, 36)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(140, 40)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        let buf = term.backend().buffer();
+        let buf = term.backend().buffer().clone();
         let mut screen = String::new();
         for y in 0..buf.area.height {
             for x in 0..buf.area.width {
@@ -2379,10 +2421,80 @@ steps = [{ repo = "api-core" }]
             screen.push('\n');
         }
         println!("{screen}");
-        for want in ["PROJECTS", "TRACKING-WEB", "CPU", "MEMORY", "RESPONSE TIME", "START-UP", "LOGS", "localhost:3002", "ready", "ERRORS (1H)"] {
+        for want in ["PROJECTS", "STOREFRONT", "CPU", "MEMORY", "RESPONSE TIME", "START-UP", "LOGS", "localhost:3002", "ready", "ERRORS (1H)"] {
             assert!(screen.contains(want), "missing {want}");
         }
+        if let Ok(out) = std::env::var("DEVHUB_SCREENSHOT") {
+            std::fs::write(out, screen_svg(&buf)).unwrap();
+        }
         let _ = std::fs::remove_file(app.state_path());
+    }
+
+    /// A rendered screen as an SVG image: one rect per background run, one text per
+    /// colour run, stretched to the grid so it lines up whatever the font.
+    fn screen_svg(buf: &ratatui::buffer::Buffer) -> String {
+        use ratatui::style::{Color, Modifier};
+        let (cw, ch, pad) = (9.0f32, 19.0f32, 14.0f32);
+        let t = crate::theme::NEON;
+        let (bg0, fg0) = (t.background.unwrap(), t.text);
+        let rgb = |c: Color, or: Color| match (c, or) {
+            (Color::Rgb(r, g, b), _) | (Color::Reset, Color::Rgb(r, g, b)) => format!("#{r:02x}{g:02x}{b:02x}"),
+            _ => "#888888".into(),
+        };
+        let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        let (w, h) = (buf.area.width, buf.area.height);
+        let mut out = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" font-family=\"Cascadia Mono, Consolas, Menlo, DejaVu Sans Mono, monospace\" font-size=\"15\">\n<rect width=\"100%\" height=\"100%\" rx=\"10\" fill=\"{}\"/>\n",
+            w as f32 * cw + pad * 2.0,
+            h as f32 * ch + pad * 2.0,
+            rgb(bg0, bg0)
+        );
+        for y in 0..h {
+            let mut x = 0;
+            while x < w {
+                let bg = buf[(x, y)].bg;
+                let mut end = x + 1;
+                while end < w && buf[(end, y)].bg == bg {
+                    end += 1;
+                }
+                if bg != Color::Reset && bg != bg0 {
+                    out += &format!(
+                        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{ch}\" fill=\"{}\"/>\n",
+                        pad + x as f32 * cw,
+                        pad + y as f32 * ch,
+                        (end - x) as f32 * cw,
+                        rgb(bg, bg0)
+                    );
+                }
+                x = end;
+            }
+        }
+        for y in 0..h {
+            let mut x = 0;
+            while x < w {
+                let c = &buf[(x, y)];
+                let (fg, bold) = (c.fg, c.modifier.contains(Modifier::BOLD));
+                let mut end = x;
+                let mut text = String::new();
+                while end < w && buf[(end, y)].fg == fg && buf[(end, y)].modifier.contains(Modifier::BOLD) == bold {
+                    text.push_str(buf[(end, y)].symbol());
+                    end += 1;
+                }
+                if !text.trim().is_empty() {
+                    out += &format!(
+                        "<text x=\"{}\" y=\"{}\" textLength=\"{}\" lengthAdjust=\"spacingAndGlyphs\" xml:space=\"preserve\" fill=\"{}\"{}>{}</text>\n",
+                        pad + x as f32 * cw,
+                        pad + y as f32 * ch + ch * 0.75,
+                        (end - x) as f32 * cw,
+                        rgb(fg, fg0),
+                        if bold { " font-weight=\"bold\"" } else { "" },
+                        esc(&text)
+                    );
+                }
+                x = end;
+            }
+        }
+        out + "</svg>\n"
     }
 
     /// devhub quits with "leave running"; the next devhub shows the server as running,

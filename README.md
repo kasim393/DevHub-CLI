@@ -2,6 +2,8 @@
 
 A terminal dashboard to run, watch and manage the dev servers of a multi-repo project — one screen, one key per action.
 
+![DevHub dashboard](docs/screenshot.png)
+
 > **v2** is a rewrite in Rust. The original PowerShell menu is kept at the
 > [`v1-powershell`](../../tree/v1-powershell) tag.
 

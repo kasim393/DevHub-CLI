@@ -270,7 +270,7 @@ fn draw_top(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .filter_map(|u| u.pid.and_then(|p| app.stats.get(&p)))
         .fold((0.0f32, 0u64), |(c, m), (uc, um)| (c + uc, m + um));
-    let clock = chrono::Local::now().format("%H:%M:%S").to_string();
+    let clock = chrono::Local::now().format("%-I:%M:%S %p").to_string();
     let mut right = vec![];
     if live > 0 {
         right.push(Span::styled(format!("● {live} RUNNING"), Style::new().fg(th().ok)));
