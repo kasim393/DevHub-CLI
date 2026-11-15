@@ -1,0 +1,24 @@
+[package]
+name = "devhub"
+version = "0.1.0"
+edition = "2021"
+description = "A minimal terminal dashboard to run, watch and manage your dev servers"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+dirs = "5"
+ratatui = "0.29"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+toml = "0.8"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

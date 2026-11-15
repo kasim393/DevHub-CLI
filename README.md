@@ -1,116 +1,87 @@
-# 🚀 DevHub CLI
+# DevHub CLI
 
-A powerful, interactive PowerShell-based environment manager for multi-repo projects. DevHub simplifies your workflow by centralizing the management of frontend and backend services, allowing you to launch, explore, and debug with just a few keystrokes.
+A terminal dashboard to run, watch and manage the dev servers of a multi-repo project — one screen, one key per action.
 
-![DevHub CLI Preview](ss1.png)
-![DevHub CLI Preview](ss2.png)
+> **v2** is a rewrite in Rust. The original PowerShell menu is kept at the
+> [`v1-powershell`](../../tree/v1-powershell) tag.
 
-## ✨ Features
+## Features
 
-- **Interactive Menu:** Navigate through your repositories using arrow keys.
-- **One-Click Start:** Launch all backend services or individual apps in new terminal windows.
-- **Live Git Branches:** Every repo shows its current branch inline, e.g. `api-core  [feature/login]`. Press `R` to refresh all.
-- **Process Tracking:** DevHub remembers what it started — a **"Stop all started processes"** option appears whenever something is running and kills the full process tree (terminal + npm + node).
-- **System Health Check:** On startup, DevHub validates that `git`, `npm`, and `code` are on your PATH and that every configured repo path exists — with clear warnings if not.
-- **Deep Integration:**
-  - `V` — open any repository in **VS Code**
-  - `E` — open the folder in **File Explorer**
-  - `B` — check the current **Git branch**
-- **Config-Driven:** All repos, categories, and apps live in a separate data file — customize everything without touching the script.
-- **Lightweight:** Pure PowerShell (5.1 and 7.x), fast and responsive.
+- **One screen**: your projects on the left; for the selected one, live charts and its log.
+- **Organized by product**: foldable sections (`←` / `→`), remembered between runs.
+- **Auto-discovery**: point it at a folder and every project inside shows up.
+- **Groups**: start `docker → api → web` with one key, each step waiting for the last.
+- **Shared dependencies**: `needs = ["api"]` starts the API first, only if it isn't running already.
+- **Servers outlive the app**: close DevHub (or let it crash) and your servers keep running; open it again and it reattaches, logs included. On quit you choose: stop all, or leave running.
+- **Neon dashboard**: CPU, memory and response-time charts, start-up progress, errors per hour, log rate and port health per server.
+- **Git built in**: branches newest first, recent commits, and a branch switcher (`b`) that fetches in the background.
+- **Logs**: find (`ctrl+f`, then `n` / `N`), follow, clear, or open the full log in your editor (`L`).
+- **Open anywhere**: VS Code, Zed, Antigravity, file explorer, or `localhost:port` in the browser.
 
-## 🛠️ Installation
+## Install
 
-1. **Clone the repository:**
+Needs [Rust](https://rustup.rs). Then, from this folder:
 
-   ```bash
-   git clone https://github.com/your-username/devhub-cli.git
-   cd devhub-cli
-   ```
-
-2. **Run it:**
-
-   Double-click `start.bat`, or run the script directly:
-
-   ```powershell
-   ./dev-manager.ps1
-   ```
-
-   > `start.bat` handles execution policy for you and works whether you have PowerShell 7 (`pwsh`) or only Windows PowerShell 5.1. If you run the `.ps1` directly after downloading (rather than cloning) and hit a "not digitally signed" error, run `Unblock-File ./dev-manager.ps1` once.
-
-## ⚙️ Configuration
-
-Everything lives in **`dev-manager.config.psd1`** next to the script — pure data, no code.
-
-### 1. Repositories
-
-Each repo needs a `Name`, `Path`, `Start` command, and `Category`:
-
-```powershell
-Repos = @(
-    @{ Name = 'api-core';     Path = 'C:\Projects\backend\api-core';  Start = 'npm start';   Category = 'Backend' }
-    @{ Name = 'main-web-app'; Path = 'C:\Projects\frontend\main-web'; Start = 'npm run dev'; Category = 'Frontend' }
-)
+```bash
+cargo install --path .
 ```
 
-The `Start` command is per-repo, so mixing `npm start`, `npm run dev`, `yarn dev`, `dotnet run`, or anything else is trivial.
+Run `devhub` from any terminal, or `devhub --focus` for a borderless, maximised Windows Terminal window.
 
-### 2. Categories
+## Config
 
-Categories become main-menu entries automatically. Add as many as you like:
+On first run DevHub writes a starter config to `%APPDATA%\devhub\config.toml`
+(`~/.config/devhub/config.toml` on Linux). Press `,` inside DevHub to edit it and
+`R` to reload. See [config.example.toml](config.example.toml) for every option.
 
-```powershell
-Categories = @(
-    @{ Name = 'Backend';  Title = '🖥️  BACKEND SERVICES'; IncludeStartAll = $true }
-    @{ Name = 'Frontend'; Title = '🌐 FRONTEND APPS';     IncludeStartAll = $false }
-)
+```toml
+# Every folder with a package.json here shows up on its own.
+[[roots]]
+path = '~/code/frontend'
+category = "Frontend"
+cmd = "npm run dev"
+
+# Start the API first, unless it already runs.
+[[repos]]
+path = '~/code/frontend/shop'
+needs = ["api"]
+
+# Several steps with one key.
+[[groups]]
+name = "stack"
+steps = [
+  { path = '~/code/stack', cmd = "docker compose up -d", wait_exit = true, stop = "docker compose stop" },
+  { path = '~/code/stack/api', cmd = "npm run dev", wait_port = 3000 },
+  { path = '~/code/stack/web', cmd = "npm run dev" },
+]
 ```
 
-### 3. Other Tools & Apps
+## Keys
 
-Launch any EXE or PATH command from the main menu:
+| Key | Action |
+| --- | --- |
+| `↑↓` `j` `k` | move |
+| `enter` | start / stop (on a section: fold) |
+| `←` `→` | fold / unfold a section |
+| `r` / `s` / `S` | restart / stop / stop everything |
+| `o` | open `localhost:port` in the browser |
+| `v` `z` `a` `e` | open in VS Code / Zed / Antigravity / file explorer |
+| `tab` | log ↔ git |
+| `b` | switch git branch |
+| `/` | filter projects |
+| `ctrl+f` `n` `N` | find in the log |
+| `pgup` `pgdn` `f` `c` `L` | scroll / follow / clear / open the log |
+| `,` / `R` | edit / reload the config |
+| `?` | all keys |
+| `q` | quit: stop all, or leave running |
 
-```powershell
-Apps = @(
-    @{ Name = 'Notepad'; Path = 'notepad.exe' }
-)
-```
+## How it works
 
-### 💡 Team tip
+- Servers run hidden; their output goes to log files in `%LOCALAPPDATA%\devhub\logs`, which DevHub follows live. That's what lets them outlive it.
+- What DevHub started is listed in `running.toml` next to the logs; a new DevHub checks those processes (by pid and start time) and reattaches.
+- CPU and memory are sampled every 2 s over each server's whole process tree; response times are read from request lines in the log (`GET /api 200 in 38ms`); the port is checked every 2 s.
+- Windows is the main target; the code also builds for macOS and Linux.
 
-Commit a `dev-manager.config.psd1.template` and gitignore the real config — every teammate keeps their own local paths (C:\ vs D:\, etc.) without merge conflicts.
+## License
 
-## ⌨️ Hotkeys
-
-| Key       | Action                                  |
-| --------- | --------------------------------------- |
-| `↑` / `↓` | Navigate menu                           |
-| `Enter`   | Launch / Select                         |
-| `V`       | Open in VS Code (repos only)            |
-| `E`       | Open in File Explorer (repos only)      |
-| `B`       | Check & refresh Git branch (repos only) |
-| `R`       | Refresh all branch labels               |
-| `Esc`     | Back to main menu / Exit                |
-
-### Adding your own hotkey
-
-Actions are data. Add one entry to `$RepoActions` in `dev-manager.ps1` and the help line, key handling, and dispatch all update automatically:
-
-```powershell
-@{
-    Name = 'Pull'; Char = 'G'; Hint = 'G = Git Pull'; RequiresRepo = $true
-    Handler = { param($Repo) git -C $Repo.Path pull; Pause }
-}
-```
-
-## 🚀 Future Roadmap
-
-- [x] **System Health Check:** Startup validation for `git`, `npm`, and `code` commands.
-- [ ] **Git Pull:** `G` hotkey to pull the highlighted repo (or pull all) before starting your day.
-- [ ] **Open in Browser:** Launch `http://localhost:<port>` for running frontends with one keystroke.
-- [ ] **Profiles:** Start a named group of repos (e.g. "auth stack") with one keystroke.
-- [ ] **Port Awareness:** Show `[running :3000]` next to repos with an active dev server.
-
----
-
-Created with ❤️ for developers who love efficiency.
+MIT

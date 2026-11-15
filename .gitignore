@@ -1,8 +1,4 @@
-# PowerShell script logs
-*.log
-
-# User-specific local settings (if any are added in future)
-*.local.ps1
+/target
 
 # OS generated files
 Thumbs.db

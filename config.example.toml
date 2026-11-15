@@ -1,0 +1,80 @@
+# devhub config
+# Press `,` in devhub to edit this file and `R` to reload it.
+# Paths use single quotes so backslashes need no escaping.
+
+# Command used by `,` to open this file.
+editor = "code"
+
+# devhub has one look (neon). "none" makes it see-through, so a terminal with
+# acrylic blur shows through:
+# background = "none"
+
+# ── Sections ────────────────────────────────────────────────────────
+# Optional: organize the list by product. Each section lists projects and
+# groups by name, in the order shown. Projects in no section stay under
+# their root's category, below these. Fold a section with ← or enter.
+[[sections]]
+name = "my-stack"
+items = ["stack", "my-app"]
+
+# ── Roots ───────────────────────────────────────────────────────────
+# Every folder inside a root that holds `marker` (package.json by default)
+# shows up on its own. Clone a repo there and it appears after `R`.
+[[roots]]
+path = '~/code/backend'
+category = "Backend"
+cmd = "npm start"
+# exclude = ["old-service"]
+
+[[roots]]
+path = '~/code/frontend'
+category = "Frontend"
+cmd = "npm run dev"
+
+# ── Repos ───────────────────────────────────────────────────────────
+# Add a project outside the roots, or change one a root found
+# (matched by path). Only `path` is required.
+[[repos]]
+path = '~/code/side/my-app'
+name = "my-app"
+cmd = "npm run dev"
+category = "Frontend"
+port = 5173            # optional: otherwise detected from the output
+needs = ["api"]        # optional: started first unless already running (waits for its port)
+
+# Keep a project out of its section but usable in groups and `needs`:
+# [[repos]]
+# path = '~/code/backend/auth'
+# listed = false
+
+# Hide a discovered folder completely:
+# [[repos]]
+# path = '~/code/backend/old-service'
+# hidden = true
+
+# ── Groups ──────────────────────────────────────────────────────────
+# Start several commands in order with one key.
+#   wait_exit = true  → wait for the command to finish (and succeed)
+#   wait_port = 3000  → wait until the port answers
+#   stop = "..."      → run this when the group is stopped
+[[groups]]
+name = "stack"
+section = "my-stack"     # optional: show it inside that section
+steps = [
+  { name = "docker", path = '~/code/my-stack', cmd = "docker compose up -d", wait_exit = true, stop = "docker compose stop" },
+  { name = "api",    path = '~/code/my-stack/api', cmd = "npm run dev", wait_port = 3000 },
+  { name = "web",    path = '~/code/my-stack/web', cmd = "npm run dev", port = 5173 },
+]
+
+# A step can also be a project from the list (`repo = "name"`). It is shared:
+# it never runs twice, and one already running is reused.
+[[groups]]
+name = "frontends"
+steps = [{ repo = "api" }, { repo = "my-app" }]
+
+# ── Open keys ───────────────────────────────────────────────────────
+# Defaults: v = code, z = zed, a = agy (Antigravity), e = file explorer.
+# Add your own or override them; `{path}` is the project folder.
+[open]
+# t = "wt -d {path}"
+# z = ""            # an empty value removes a key
